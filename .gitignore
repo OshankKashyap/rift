@@ -1,0 +1,6 @@
+.runtime/*
+.venv/*
+.env/*
+env/*
+venv/*
+*.diff

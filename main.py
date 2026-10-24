@@ -177,11 +177,15 @@ class Controller(QObject):
 
     def save_capture(self, name, windows, group_id):
         try:
+            before = len(self.storage.windows(group_id)) if group_id else 0
             self._selected = self.storage.capture(name, windows, group_id)
+            added = len(self.storage.windows(self._selected)) - before
+            skipped = len(windows) - added
             self.refresh()
             self.done()
             unresolved = [w["title"] for w in windows if not w.get("app_id") or not w.get("desktop_file")]
-            self.report(f"Captured {len(windows)} main windows."
+            self.report(f"Added {added} main windows."
+                + (f" Skipped {skipped} already-saved windows." if skipped else "")
                 + (" Review app identity/desktop-file overrides for: " + ", ".join(unresolved) if unresolved else ""))
             return True
         except (ValueError, OSError, sqlite3.Error) as exc:
@@ -274,7 +278,7 @@ def main():
     app.setApplicationName("rift")
     app.setApplicationDisplayName("Rift")
     app.setDesktopFileName("org.rift.Application")
-    app.setWindowIcon(QIcon.fromTheme("view-grid"))
+    app.setWindowIcon(QIcon(str(ROOT / "logos/rift.png")))
     storage = Storage(ROOT / "rift.sqlite3")
     try:
         kwin = KWin(RUNTIME, app)

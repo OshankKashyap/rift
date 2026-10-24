@@ -1,10 +1,9 @@
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 
 class Tray(QSystemTrayIcon):
     def __init__(self, window, launch, parent=None):
-        super().__init__(QIcon.fromTheme("view-grid"), parent)
+        super().__init__(QApplication.windowIcon(), parent)
         self.window = window
         self.launch = launch
         self.menu = QMenu()

@@ -19,7 +19,7 @@ AppDialog {
         Controls.Label {
             text: rift.pickerName
                 ? "Choose windows for “" + rift.pickerName + "”. The group is created only when you confirm."
-                : "Choose from this snapshot of open main windows. Existing group entries stay unchanged."
+                : "Choose from this snapshot of open main windows. Already-saved windows are skipped; existing entries stay unchanged."
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             Layout.fillWidth: true

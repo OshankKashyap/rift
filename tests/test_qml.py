@@ -520,3 +520,34 @@ def test_new_group_picker_rejects_blank_name(ui, monkeypatch):
     assert "group name" in controller.status
     assert not controller.busy
     assert not warnings
+
+
+@pytest.mark.parametrize("selective", [False, True])
+def test_both_add_paths_skip_saved_window_and_keep_other_same_app_window(ui, monkeypatch, selective):
+    window, controller, gid, warnings = ui
+    controller.select(gid)
+    saved = controller.storage.windows(gid)[0]
+    # Associate the pre-feature saved row with its live KWin ID first.
+    controller.storage.capture("", [dict(saved, window_id="saved-window")], gid)
+    rows = [dict(saved, window_id="saved-window", title="Title changed", x=200),
+            dict(saved, window_id="other-window")]
+    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: callback(rows, None))
+    if selective:
+        controller.preparePicker(gid)
+        picker = window.findChild(QObject, "windowPicker")
+        wait_for_popup(picker)
+        controller.setPicked(0, True)
+        controller.setPicked(1, True)
+        click_button(window, picker.findChild(QObject, "addPickedButton"))
+        wait_for_popup(picker, opened=False)
+    else:
+        controller.capture("", gid)
+    assert [w["window_id"] for w in controller.windows] == ["saved-window", "other-window"]
+    assert controller.windows[0]["title"] == "Notes"
+    assert "Added 1" in controller.status
+    assert "Skipped 1" in controller.status
+    controller.capture("", gid)
+    assert len(controller.windows) == 2
+    assert "Added 0" in controller.status
+    assert "Skipped 2" in controller.status
+    assert not warnings

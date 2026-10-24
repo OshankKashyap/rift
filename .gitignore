@@ -4,3 +4,7 @@
 env/*
 venv/*
 *.diff
+*__pycache__*
+rift.sqlite3
+pycache/
+*.pyc

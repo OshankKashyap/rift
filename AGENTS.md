@@ -5,6 +5,7 @@
 - Never install system packages. Ask the user to install missing prerequisites.
 - Use the OS-default Python to create `.venv`; pip-install only dependencies in `requirements.txt` into it.
 - Approved compatibility exception: `.venv` uses `--system-site-packages` to read Fedora's existing PySide6/Qt/Kirigami stack. Keep pytest local; do not replace or modify system packages. Pip Qt wheels have incompatible private ABIs here.
+- Approved launch fallback: pass registered desktop IDs to `kstart --application`; use KDE `kioclient exec` for exact absolute desktop paths outside XDG roots or shadowed by another entry. Never register/copy targets or bypass KDE trust checks automatically.
 - Stack: PySide6, QML, Kirigami, Python backend, SQLite. Preserve the requested flat backend layout.
 - No assumptions: stop and ask when requirements, permissions, or user actions are unclear.
 - Use parameterized SQL and additive schema changes. Never send SIGKILL; recall uses KWin close requests.

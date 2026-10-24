@@ -90,13 +90,25 @@ class DesktopResolver:
 
     def entry(self, path):
         parser = configparser.ConfigParser(interpolation=None, strict=False)
-        parser.read(path, encoding="utf-8")
+        try:
+            parser.read(path, encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"Invalid desktop file: {path}. Expected UTF-8 desktop-entry text; "
+                "an executable with a .desktop filename is not a desktop entry."
+            ) from exc
         if not parser.has_section("Desktop Entry"):
             raise ValueError(f"Invalid desktop file: {path}")
         entry = parser["Desktop Entry"]
         if entry.get("Type", "Application") != "Application" or entry.getboolean("Hidden", False):
             raise ValueError(f"Desktop file is not a launchable application: {path}")
         return entry
+
+    def desktop_id(self, path):
+        for root in self.roots:
+            if Path(path).is_relative_to(root):
+                return str(Path(path).relative_to(root)).removesuffix(".desktop").replace("/", "-")
+        return ""
 
     def executable(self, path):
         if not path:
@@ -132,6 +144,7 @@ class Launcher:
         self.kwin = kwin
         self.resolver = resolver
         self.report = report
+        self.processes = set()
 
     def snapshot(self, callback, main_only=True):
         def received(windows, error):
@@ -146,6 +159,30 @@ class Launcher:
             callback(windows, None)
         self.kwin.snapshot(received, main_only=main_only)
 
+    def run_helper(self, program, arguments, callback):
+        process = QProcess()
+        self.processes.add(process)
+
+        def complete(error):
+            if process not in self.processes:
+                return
+            self.processes.remove(process)
+            process.deleteLater()
+            callback(error)
+
+        def finished(code, status):
+            diagnostic = bytes(process.readAllStandardError()).decode("utf-8", errors="replace").strip()
+            if code != 0 or status != QProcess.ExitStatus.NormalExit:
+                complete(f"{Path(program).name} failed: {diagnostic or f'exit code {code}'}")
+            else:
+                complete(None)
+
+        process.finished.connect(finished)
+        process.errorOccurred.connect(lambda error: complete(
+            f"Cannot start {program}: {process.errorString()}")
+            if error == QProcess.ProcessError.FailedToStart else None)
+        process.start(program, arguments)
+
     def activate(self, window, callback):
         path = window.get("desktop_file")
         if not path:
@@ -158,24 +195,31 @@ class Launcher:
             callback(str(exc))
             return
 
+        desktop_id = self.resolver.desktop_id(path)
+
         def fallback(*_):
-            kstart = shutil.which("kstart") or shutil.which("kstart6")
-            if not kstart:
-                callback("kstart is missing. Ask the user to install Fedora's plasma-workspace package.")
+            # kstart looks up a registered desktop ID; it does not open a file path.
+            if desktop_id and self.resolver.resolve(desktop_id) == path:
+                kstart = shutil.which("kstart") or shutil.which("kstart6")
+                if not kstart:
+                    callback("kstart is missing. Ask the user to install Fedora's kde-cli-tools package.")
+                    return
+                ok, _pid = QProcess.startDetached(kstart, ["--application", desktop_id])
+                callback(None if ok else f"kstart could not launch {path}")
                 return
-            ok, _pid = QProcess.startDetached(kstart, ["--application", path])
-            callback(None if ok else f"kstart could not launch {path}")
+            kioclient = shutil.which("kioclient6") or shutil.which("kioclient")
+            if not kioclient:
+                callback("kioclient is missing. Ask the user to install Fedora's kde-cli-tools package.")
+                return
+            LOG.info("Launching exact desktop file through kioclient: %s", path)
+            self.run_helper(kioclient, ["exec", Path(path).as_uri(), "application/x-desktop"], callback)
 
         if not activatable:
             fallback()
             return
-        desktop_id = Path(path).stem
-        for root in self.resolver.roots:
-            if Path(path).is_relative_to(root):
-                desktop_id = str(Path(path).relative_to(root)).removesuffix(".desktop").replace("/", "-")
-                break
-        object_path = "/" + desktop_id.replace(".", "/").replace("-", "_")
-        self.kwin.call(desktop_id, object_path, "org.freedesktop.Application", "Activate", [{}],
+        activation_id = desktop_id or Path(path).stem
+        object_path = "/" + activation_id.replace(".", "/").replace("-", "_")
+        self.kwin.call(activation_id, object_path, "org.freedesktop.Application", "Activate", [{}],
                        lambda _, error: fallback() if error else callback(None))
 
     def launch(self, stored, done):

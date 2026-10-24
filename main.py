@@ -37,6 +37,9 @@ class Controller(QObject):
     changed = Signal()
     statusChanged = Signal()
     busyChanged = Signal()
+    pickerChanged = Signal()
+    pickerReady = Signal()
+    picksChanged = Signal()
 
     def __init__(self, storage, kwin, parent=None):
         super().__init__(parent)
@@ -46,6 +49,26 @@ class Controller(QObject):
         self._busy = False
         self._status = "Ready. Capture main windows to create a group."
         self.tray = None
+        self._candidates = []
+        self._picker_group = 0
+        self._picker_name = ""
+        self._picked = set()
+
+    @Property("QVariantList", notify=pickerChanged)
+    def candidates(self):
+        return self._candidates
+
+    @Property(str, notify=pickerChanged)
+    def pickerName(self):
+        return self._picker_name
+
+    @Property("QVariantList", notify=picksChanged)
+    def pickedIndices(self):
+        return sorted(self._picked)
+
+    @Property(int, notify=picksChanged)
+    def pickedCount(self):
+        return len(self._picked)
 
     @Property("QVariantList", notify=changed)
     def groups(self):
@@ -149,16 +172,80 @@ class Controller(QObject):
             if not windows:
                 self.done("No main windows found; no group was changed.")
                 return
-            try:
-                self._selected = self.storage.capture(name, windows, group_id)
-                self.refresh()
-                self.done()
-                unresolved = [w["title"] for w in windows if not w.get("app_id") or not w.get("desktop_file")]
-                self.report(f"Captured {len(windows)} main windows."
-                    + (" Review app identity/desktop-file overrides for: " + ", ".join(unresolved) if unresolved else ""))
-            except (ValueError, OSError, sqlite3.Error) as exc:
-                self.done(str(exc))
+            self.save_capture(name, windows, group_id)
         self.launcher.snapshot(captured)
+
+    def save_capture(self, name, windows, group_id):
+        try:
+            self._selected = self.storage.capture(name, windows, group_id)
+            self.refresh()
+            self.done()
+            unresolved = [w["title"] for w in windows if not w.get("app_id") or not w.get("desktop_file")]
+            self.report(f"Captured {len(windows)} main windows."
+                + (" Review app identity/desktop-file overrides for: " + ", ".join(unresolved) if unresolved else ""))
+            return True
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            self.done(str(exc))
+            return False
+
+    @Slot(int)
+    @Slot(int, str)
+    def preparePicker(self, group_id, name=""):
+        if not group_id and not name.strip():
+            self.report("Enter a group name first.")
+            return
+        if not self.begin():
+            return
+        self.cancelPicker()
+
+        def captured(windows, error):
+            if error:
+                self.done(error)
+                return
+            self._picker_group = group_id
+            self._picker_name = name.strip() if not group_id else ""
+            for index, window in enumerate(windows):
+                app_name = window.get("app_id") or "Unknown app"
+                if window.get("desktop_file"):
+                    try:
+                        app_name = self.launcher.resolver.entry(window["desktop_file"]).get("Name", app_name)
+                    except (ValueError, OSError, configparser.Error):
+                        pass  # Unresolved launchers must not prevent selecting a window.
+                self._candidates.append(dict(window, candidate_index=index, app_name=app_name))
+            self.pickerChanged.emit()
+            self.done()
+            self.report("Choose windows to save. Nothing is saved until you confirm the selection.")
+            self.pickerReady.emit()
+
+        self.launcher.snapshot(captured)
+
+    @Slot(int, bool)
+    def setPicked(self, index, picked):
+        if 0 <= index < len(self._candidates):
+            if picked:
+                self._picked.add(index)
+            else:
+                self._picked.discard(index)
+            self.picksChanged.emit()
+
+    @Slot()
+    def cancelPicker(self):
+        self._candidates = []
+        self._picker_group = 0
+        self._picker_name = ""
+        self._picked.clear()
+        self.pickerChanged.emit()
+        self.picksChanged.emit()
+
+    @Slot(result=bool)
+    def addPicked(self):
+        windows = [w for index, w in enumerate(self._candidates) if index in self._picked]
+        if not windows or not (self._picker_group or self._picker_name) or not self.begin():
+            return False
+        if not self.save_capture(self._picker_name, windows, self._picker_group):
+            return False
+        self.cancelPicker()
+        return True
 
     def group_action(self, group_id, action):
         if not self.begin():

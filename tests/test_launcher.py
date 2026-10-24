@@ -1,4 +1,7 @@
 import logging
+from pathlib import Path
+import sys
+import time
 
 import pytest
 
@@ -87,6 +90,16 @@ def test_no_execution_of_desktop_exec(tmp_path):
     resolver = DesktopResolver()
     assert resolver.executable(str(desktop))
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("content", [b"\x7fELF\x02\x01\xdd", b"[Desktop Entry]\nName=\xdd\n"])
+def test_invalid_desktop_encoding_reports_expected_format(tmp_path, content):
+    desktop = tmp_path / "invalid.desktop"
+    desktop.write_bytes(content)
+    results = []
+    Launcher(None, DesktopResolver(), lambda _: None).activate({"desktop_file": str(desktop)}, results.append)
+    assert len(results) == 1
+    assert "Expected UTF-8 desktop-entry text" in results[0]
 
 
 def test_launch_skips_running_and_dedupes_without_kwin_writes():
@@ -186,10 +199,20 @@ def test_live_unknown_pid_does_not_infer_process_from_desktop(tmp_path):
 
 
 @pytest.mark.parametrize("activatable,bus_error", [(True, None), (True, "activation failed"), (False, None)])
-def test_desktop_activation_and_kstart_fallback(tmp_path, monkeypatch, activatable, bus_error):
-    desktop = tmp_path / "org.example.App.desktop"
+@pytest.mark.parametrize("outside_roots", [False, True])
+@pytest.mark.parametrize("relative_name", ["org.kde.konsole.desktop", "nested/ai.opencode.desktop"])
+def test_desktop_activation_and_file_fallbacks(tmp_path, monkeypatch, activatable, bus_error, outside_roots, relative_name):
+    resolver = DesktopResolver()
+    resolver.roots = [tmp_path / "applications"]
+    directory = tmp_path / "opt/Open Code #1" if outside_roots else resolver.roots[0]
+    desktop = directory / relative_name
+    desktop.parent.mkdir(parents=True)
     desktop.write_text("[Desktop Entry]\nType=Application\nExec=/usr/bin/true\n"
                        + f"DBusActivatable={str(activatable).lower()}\n")
+    assert desktop.is_absolute()
+    assert desktop.is_relative_to(resolver.roots[0]) == (not outside_roots)
+    resolved = resolver.resolve(str(desktop))
+    assert resolved == str(desktop)
     calls, processes, results = [], [], []
 
     class KWin:
@@ -204,16 +227,95 @@ def test_desktop_activation_and_kstart_fallback(tmp_path, monkeypatch, activatab
             return True, 123
 
     monkeypatch.setattr("backend.launcher.QProcess", Process)
-    monkeypatch.setattr("backend.launcher.shutil.which", lambda _: "/usr/bin/kstart")
-    launcher = Launcher(KWin(), DesktopResolver(), lambda _: None)
-    launcher.activate({"desktop_file": str(desktop)}, results.append)
+    monkeypatch.setattr("backend.launcher.shutil.which", lambda name: {
+        "kstart": "/usr/bin/kstart", "kioclient": "/usr/bin/kioclient"}.get(name))
+    launcher = Launcher(KWin(), resolver, lambda _: None)
+
+    def run_helper(program, arguments, callback):
+        processes.append((program, arguments))
+        callback(None)
+
+    monkeypatch.setattr(launcher, "run_helper", run_helper)
+    launcher.activate({"desktop_file": resolved}, results.append)
     assert results == [None]
+    desktop_id = Path(relative_name).stem if outside_roots else relative_name.removesuffix(".desktop").replace("/", "-")
     if activatable:
-        assert calls == [("org.example.App", "/org/example/App", "org.freedesktop.Application", "Activate", [{}])]
+        object_path = "/" + desktop_id.replace(".", "/").replace("-", "_")
+        assert calls == [(desktop_id, object_path, "org.freedesktop.Application", "Activate", [{}])]
     else:
         assert calls == []
-    assert processes == ([] if activatable and not bus_error else [
-        ("/usr/bin/kstart", ["--application", str(desktop)])])
+    if activatable and not bus_error:
+        assert processes == []
+    elif outside_roots:
+        assert processes == [("/usr/bin/kioclient", ["exec", desktop.as_uri(), "application/x-desktop"])]
+    else:
+        assert processes == [("/usr/bin/kstart", ["--application", desktop_id])]
+
+
+def test_absolute_path_does_not_launch_shadowing_xdg_entry(tmp_path, monkeypatch):
+    resolver = DesktopResolver()
+    resolver.roots = [tmp_path / "local", tmp_path / "system"]
+    for root in resolver.roots:
+        root.mkdir()
+        (root / "org.kde.konsole.desktop").write_text("[Desktop Entry]\nType=Application\nExec=konsole\n")
+    desktop = resolver.roots[1] / "org.kde.konsole.desktop"
+    assert resolver.resolve("org.kde.konsole") != str(desktop)
+    monkeypatch.setattr("backend.launcher.shutil.which", lambda name: "/usr/bin/kioclient" if name == "kioclient" else None)
+    launcher = Launcher(None, resolver, lambda _: None)
+    calls, results = [], []
+
+    def run_helper(program, arguments, callback):
+        calls.append((program, arguments))
+        callback(None)
+
+    monkeypatch.setattr(launcher, "run_helper", run_helper)
+    launcher.activate({"desktop_file": str(desktop)}, results.append)
+    assert results == [None]
+    assert calls == [("/usr/bin/kioclient", ["exec", desktop.as_uri(), "application/x-desktop"])]
+
+
+@pytest.mark.parametrize("outside_roots", [False, True])
+def test_missing_launch_helper_is_reported(tmp_path, monkeypatch, outside_roots):
+    resolver = DesktopResolver()
+    resolver.roots = [tmp_path / "applications"]
+    directory = tmp_path / "external" if outside_roots else resolver.roots[0]
+    directory.mkdir()
+    desktop = directory / "app.desktop"
+    desktop.write_text("[Desktop Entry]\nType=Application\nExec=app\n")
+    monkeypatch.setattr("backend.launcher.shutil.which", lambda _: None)
+    results = []
+    Launcher(None, resolver, lambda _: None).activate({"desktop_file": str(desktop)}, results.append)
+    assert len(results) == 1
+    assert ("kioclient" if outside_roots else "kstart") + " is missing" in results[0]
+
+
+@pytest.mark.parametrize("case", ["success", "nonzero", "invalid_stderr", "start_failure"])
+def test_real_helper_process_reports_result_without_launching_apps(app, tmp_path, case):
+    from PySide6.QtTest import QTest
+
+    launcher = Launcher(None, None, lambda _: None)
+    results = []
+    program = str(tmp_path / "missing-helper") if case == "start_failure" else sys.executable
+    script = {
+        "success": "pass",
+        "nonzero": "import sys; sys.stderr.write('Desktop launch refused'); sys.exit(1)",
+        "invalid_stderr": "import sys; sys.stderr.buffer.write(bytes([221])); sys.exit(1)",
+        "start_failure": "pass",
+    }[case]
+    launcher.run_helper(program, ["-c", script], results.append)
+    deadline = time.monotonic() + 5
+    while not results and time.monotonic() < deadline:
+        QTest.qWait(10)
+    assert len(results) == 1
+    assert not launcher.processes
+    if case == "success":
+        assert results == [None]
+    elif case == "start_failure":
+        assert "Cannot start" in results[0]
+    elif case == "nonzero":
+        assert "Desktop launch refused" in results[0]
+    else:
+        assert "failed:" in results[0]
 
 
 def test_launch_attempts_every_app_even_after_failure(monkeypatch):

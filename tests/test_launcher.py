@@ -8,6 +8,11 @@ import pytest
 from backend.launcher import DesktopResolver, Launcher, dedupe, match_key, matches
 
 
+class Resolver:
+    def enrich(self, windows):
+        return windows
+
+
 @pytest.mark.parametrize("stored,live,expected", [
     ({"app_id": "Org.KDE.Kate.desktop"}, {"app_id": "org.kde.kate"}, True),
     ({"app_id": "kate"}, {"app_id": "org.kde.kate"}, False),
@@ -103,10 +108,6 @@ def test_invalid_desktop_encoding_reports_expected_format(tmp_path, content):
 
 
 def test_launch_skips_running_and_dedupes_without_kwin_writes():
-    class Resolver:
-        def enrich(self, windows):
-            return windows
-
     class KWin:
         def snapshot(self, callback, main_only=True):
             callback([{"app_id": "kate", "window_id": "existing"}], None)
@@ -119,10 +120,6 @@ def test_launch_skips_running_and_dedupes_without_kwin_writes():
 
 
 def test_recall_only_requests_matching_windows_including_dialogs():
-    class Resolver:
-        def enrich(self, windows):
-            return windows
-
     class KWin:
         def snapshot(self, callback, main_only=True):
             assert not main_only
@@ -146,10 +143,6 @@ def test_geometry_only_targets_unique_new_windows(monkeypatch, ambiguous):
         @staticmethod
         def singleShot(delay, callback):
             callback()
-
-    class Resolver:
-        def enrich(self, windows):
-            return windows
 
     class KWin:
         def __init__(self):
@@ -319,10 +312,6 @@ def test_real_helper_process_reports_result_without_launching_apps(app, tmp_path
 
 
 def test_launch_attempts_every_app_even_after_failure(monkeypatch):
-    class Resolver:
-        def enrich(self, windows):
-            return windows
-
     class KWin:
         def snapshot(self, callback, main_only=True):
             callback([], None)

@@ -157,10 +157,15 @@ class Controller(QObject):
         else:
             self.report("Operation complete. Review the session log for matching warnings.")
 
-    @Slot(str, int)
-    def capture(self, name, group_id):
+    def _blank_name(self, group_id, name):
         if not group_id and not name.strip():
             self.report("Enter a group name first.")
+            return True
+        return False
+
+    @Slot(str, int)
+    def capture(self, name, group_id):
+        if self._blank_name(group_id, name):
             return
         if not self.begin():
             return
@@ -195,8 +200,7 @@ class Controller(QObject):
     @Slot(int)
     @Slot(int, str)
     def preparePicker(self, group_id, name=""):
-        if not group_id and not name.strip():
-            self.report("Enter a group name first.")
+        if self._blank_name(group_id, name):
             return
         if not self.begin():
             return

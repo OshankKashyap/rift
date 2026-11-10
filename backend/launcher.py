@@ -67,6 +67,18 @@ class DesktopResolver:
         data_home = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))
         self.roots = [Path(p) / "applications" for p in
                       [data_home, *os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")]]
+        self._actions = 0
+        self._index = None
+
+    def begin_action(self):
+        """Open one user action; the rglob fallback may memoize until it ends (PF-02)."""
+        self._actions += 1
+
+    def end_action(self):
+        if self._actions:
+            self._actions -= 1
+            if not self._actions:
+                self._index = None
 
     def resolve(self, hint):
         if not hint:
@@ -83,10 +95,25 @@ class DesktopResolver:
                 return str(direct)
             # Desktop IDs flatten subdirectories using '-', as specified by XDG.
             if root.is_dir():
-                for candidate in root.rglob("*.desktop"):
-                    if str(candidate.relative_to(root)).replace("/", "-") == name:
-                        return str(candidate)
+                hit = self._desktop_index().get(name)
+                if hit:
+                    return hit
         return ""
+
+    def _desktop_index(self):
+        """Mangled desktop ID -> path, from one rglob walk per action (PF-02)."""
+        if self._actions and self._index is not None:
+            return self._index
+        index = {}
+        for root in self.roots:
+            if not root.is_dir():
+                continue
+            for candidate in root.rglob("*.desktop"):
+                index.setdefault(str(candidate.relative_to(root)).replace("/", "-"),
+                                 str(candidate))
+        if self._actions:
+            self._index = index
+        return index
 
     def entry(self, path):
         parser = configparser.ConfigParser(interpolation=None, strict=False)
@@ -148,15 +175,19 @@ class Launcher:
 
     def snapshot(self, callback, main_only=True):
         def received(windows, error):
-            if error:
-                callback(None, error)
-                return
+            self.resolver.begin_action()
             try:
-                windows = self.resolver.enrich(windows)
-            except (OSError, ValueError, configparser.Error) as exc:
-                callback(None, str(exc))
-                return
-            callback(windows, None)
+                if error:
+                    callback(None, error)
+                    return
+                try:
+                    windows = self.resolver.enrich(windows)
+                except (OSError, ValueError, configparser.Error) as exc:
+                    callback(None, str(exc))
+                    return
+                callback(windows, None)
+            finally:
+                self.resolver.end_action()
         self.kwin.snapshot(received, main_only=main_only)
 
     def run_helper(self, program, arguments, callback):
@@ -223,12 +254,22 @@ class Launcher:
                        lambda _, error: fallback() if error else callback(None))
 
     def launch(self, stored, done):
-        stored = self.resolver.enrich(stored)
-        apps = dedupe(stored)
+        self.resolver.begin_action()
+
+        def completed(error):
+            self.resolver.end_action()
+            done(error)
+
+        try:
+            stored = self.resolver.enrich(stored)
+            apps = dedupe(stored)
+        except BaseException:
+            self.resolver.end_action()
+            raise
 
         def captured(live, error):
             if error:
-                done(error)
+                completed(error)
                 return
             todo = [w for w in apps if not any(matches(w, v) for v in live)]
             skipped = len(apps) - len(todo)
@@ -240,7 +281,7 @@ class Launcher:
             def next_app(index=0):
                 if index == len(todo):
                     if not launched:
-                        done("; ".join(errors) or None)
+                        completed("; ".join(errors) or None)
                         return
                     QTimer.singleShot(1000, lambda: settle(0))
                     return
@@ -257,7 +298,7 @@ class Launcher:
             def settle(attempt):
                 def received(current, err):
                     if err:
-                        done(err)
+                        completed(err)
                         return
                     fresh = [v for v in current if v["window_id"] not in original_ids]
                     placements = []
@@ -286,22 +327,40 @@ class Launcher:
                         errors.append("No unique new window for: " + ", ".join(missing)
                                       + ". Review matching overrides; geometry was not guessed.")
                     self.kwin.restore(placements, lambda _, restore_error:
-                        done("; ".join(errors + ([restore_error] if restore_error else [])) or None))
+                        completed("; ".join(errors + ([restore_error] if restore_error else [])) or None))
                 self.snapshot(received)
             next_app()
-        self.snapshot(captured)
+        try:
+            self.snapshot(captured)
+        except BaseException:
+            self.resolver.end_action()
+            raise
 
     def recall(self, stored, done):
-        stored = self.resolver.enrich(stored)
+        self.resolver.begin_action()
+
+        def completed(error):
+            self.resolver.end_action()
+            done(error)
+
+        try:
+            stored = self.resolver.enrich(stored)
+        except BaseException:
+            self.resolver.end_action()
+            raise
 
         def captured(live, error):
             if error:
-                done(error)
+                completed(error)
                 return
             ids = [v["window_id"] for v in live if any(matches(w, v) for w in stored)]
             def closed(count, err):
-                done(err)
+                completed(err)
                 if not err:
                     self.report(f"Sent {count} graceful close requests. Save prompts may remain open.")
             self.kwin.close_windows(ids, closed)
-        self.snapshot(captured, main_only=False)
+        try:
+            self.snapshot(captured, main_only=False)
+        except BaseException:
+            self.resolver.end_action()
+            raise

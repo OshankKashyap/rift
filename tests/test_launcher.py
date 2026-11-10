@@ -12,6 +12,12 @@ class Resolver:
     def enrich(self, windows):
         return windows
 
+    def begin_action(self):
+        pass
+
+    def end_action(self):
+        pass
+
 
 @pytest.mark.parametrize("stored,live,expected", [
     ({"app_id": "Org.KDE.Kate.desktop"}, {"app_id": "org.kde.kate"}, True),
@@ -327,3 +333,166 @@ def test_launch_attempts_every_app_even_after_failure(monkeypatch):
     launcher.launch([{"app_id": "one"}, {"app_id": "two"}, {"app_id": "ONE"}], results.append)
     assert calls == ["one", "two"]
     assert results == ["Cannot launch one; Cannot launch two"]
+
+
+def test_resolve_equivalence_matrix_with_memoized_index(tmp_path):
+    local, system = tmp_path / "local", tmp_path / "system"
+    (local / "nested").mkdir(parents=True)
+    system.mkdir()
+    (local / "app.desktop").write_text("[Desktop Entry]\n")
+    (local / "nested" / "deep.desktop").write_text("[Desktop Entry]\n")
+    (system / "app.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [local, system]
+    expected = {
+        "app": str(local / "app.desktop"),  # direct flat hit; first root wins the basename
+        "nested-deep": str(local / "nested/deep.desktop"),  # mangled relative path
+        "missing": "",
+        "APP": "",
+        str(local / "app.desktop"): str(local / "app.desktop"),
+    }
+    for hint, path in expected.items():
+        assert resolver.resolve(hint) == path
+        resolver.begin_action()
+        try:
+            assert resolver.resolve(hint) == path
+        finally:
+            resolver.end_action()
+
+
+def test_resolve_direct_flat_file_beats_same_mangled_nested_id(tmp_path):
+    local = tmp_path / "local"
+    (local / "a").mkdir(parents=True)
+    (local / "a-b.desktop").write_text("[Desktop Entry]\n")
+    (local / "a" / "b.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [local]
+    assert resolver.resolve("a-b") == str(local / "a-b.desktop")
+    resolver.begin_action()
+    try:
+        assert resolver.resolve("a-b") == str(local / "a-b.desktop")
+    finally:
+        resolver.end_action()
+
+
+def test_resolve_first_root_nested_beats_second_root_flat(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    (first / "sub").mkdir(parents=True)
+    second.mkdir()
+    (first / "sub" / "a-b.desktop").write_text("[Desktop Entry]\n")
+    (second / "sub-a-b.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [first, second]
+    # The first root's walk match (ID "sub-a-b" from sub/a-b.desktop) wins before
+    # the second root's flat file with the same ID is consulted, as today.
+    assert resolver.resolve("sub-a-b") == str(first / "sub" / "a-b.desktop")
+
+
+def test_action_scope_walks_once_for_many_unresolvable_hints(tmp_path, monkeypatch):
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "app.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [local]
+    walks = []
+    real_rglob = Path.rglob
+
+    def counting_rglob(self, pattern):
+        walks.append(pattern)
+        return real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counting_rglob)
+    resolver.begin_action()
+    try:
+        resolver.enrich([{"app_id": f"ghost-{i}", "pid": -1} for i in range(5)])
+        assert len(walks) == 1
+        resolver.enrich([{"app_id": f"other-{i}", "pid": -1} for i in range(3)])
+        assert len(walks) == 1
+        resolver.enrich([{"app_id": "app", "pid": -1}])
+        assert len(walks) == 1
+    finally:
+        resolver.end_action()
+    resolver.enrich([{"app_id": "ghost-unscoped", "pid": -1}])
+    assert len(walks) == 2
+
+
+def test_action_with_only_direct_hits_performs_zero_walks(tmp_path, monkeypatch):
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "app.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [local]
+    walks = []
+    real_rglob = Path.rglob
+
+    def counting_rglob(self, pattern):
+        walks.append(pattern)
+        return real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counting_rglob)
+    resolver.begin_action()
+    try:
+        assert resolver.resolve("app") == str(local / "app.desktop")
+        assert resolver.enrich([{"app_id": "app", "pid": -1}])[0]["desktop_file"] \
+            == str(local / "app.desktop")
+    finally:
+        resolver.end_action()
+    assert walks == []
+
+
+def test_index_is_discarded_between_actions(tmp_path):
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "app.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [local]
+    resolver.begin_action()
+    try:
+        assert resolver.resolve("late") == ""
+    finally:
+        resolver.end_action()
+    (local / "late.desktop").write_text("[Desktop Entry]\n")
+    resolver.begin_action()
+    try:
+        assert resolver.resolve("late") == str(local / "late.desktop")
+    finally:
+        resolver.end_action()
+
+
+def test_snapshot_ends_action_even_when_callback_raises(tmp_path):
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "app.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [local]
+
+    class KWin:
+        def snapshot(self, callback, main_only=True):
+            callback([{"app_id": "ghost", "window_id": "w", "pid": -1}], None)
+
+    def failing(windows, error):
+        raise RuntimeError("callback failed")
+
+    launcher = Launcher(KWin(), resolver, lambda _: None)
+    with pytest.raises(RuntimeError):
+        launcher.snapshot(failing)
+    (local / "late.desktop").write_text("[Desktop Entry]\n")
+    resolver.begin_action()
+    try:
+        assert resolver.resolve("late") == str(local / "late.desktop")
+    finally:
+        resolver.end_action()
+
+
+def test_enrich_still_mutates_input_dicts_in_place(tmp_path):
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "app.desktop").write_text("[Desktop Entry]\n")
+    resolver = DesktopResolver()
+    resolver.roots = [local]
+    rows = [{"app_id": "app", "pid": -1}, {"app_id": "ghost", "pid": -1}]
+    assert resolver.enrich(rows) is rows
+    assert rows[0]["desktop_file"] == str(local / "app.desktop")
+    assert rows[1]["desktop_file"] == ""
+    assert rows[0]["process"] == ""
+    assert rows[1]["process"] == ""

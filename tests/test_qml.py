@@ -50,7 +50,40 @@ def test_group_detail_loads_without_qml_errors(ui):
     assert not warnings
 
 
-@pytest.mark.parametrize("name", ["captureDialog", "renameDialog", "deleteDialog", "recallDialog", "overrideDialog", "removeDialog"])
+def test_session_preferences_remain_enabled_when_window_loads(app):
+    storage = Storage(":memory:")
+    storage.set_session_option("enabled", True)
+    storage.set_session_option("smart", True)
+    controller = Controller(storage, None)
+    engine = QQmlApplicationEngine()
+    engine.addImportPath(str(SYSTEM_QT / "qml"))
+    engine.rootContext().setContextProperty("rift", controller)
+    engine.load(QUrl.fromLocalFile(str(ROOT / "qml/main.qml")))
+    assert engine.rootObjects()
+    assert controller.sessionEnabled and controller.smartRestore
+    engine.deleteLater()
+    QCoreApplication.sendPostedEvents(engine, QEvent.DeferredDelete)
+    storage.close()
+
+
+def test_session_switch_shows_settings_and_preserves_smart_option(ui):
+    window, controller, _, warnings = ui
+    controller.setSmartRestore(True)
+    dialog = window.findChild(QObject, "preferencesDialog")
+    QMetaObject.invokeMethod(dialog, "open")
+    wait_for_popup(dialog)
+    switch = dialog.findChild(QObject, "sessionRestoreSwitch")
+    settings = dialog.findChild(QObject, "sessionRestoreSettings")
+    assert not settings.property("visible")
+    click_button(window, switch)
+    assert controller.sessionEnabled and settings.property("visible")
+    click_button(window, switch)
+    assert not controller.sessionEnabled and not settings.property("visible")
+    assert controller.smartRestore
+    assert not warnings
+
+
+@pytest.mark.parametrize("name", ["captureDialog", "renameDialog", "deleteDialog", "recallDialog", "overrideDialog", "removeDialog", "preferencesDialog"])
 def test_dialog_renders_offscreen(ui, name):
     window, controller, gid, warnings = ui
     controller.select(gid)

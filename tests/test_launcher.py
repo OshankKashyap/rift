@@ -179,14 +179,14 @@ def test_geometry_only_targets_unique_new_windows(monkeypatch, ambiguous):
 
     monkeypatch.setattr(launcher, "activate", activate)
     results = []
-    launcher.launch([dict(app_id="kate", title="Captured", x=-900, y=10, w=800, h=600)], results.append)
+    launcher.launch([dict(app_id="kate", title="Captured", x=-900, y=10, w=800, h=600, maximize_mode=3)], results.append)
     assert activations == ["kate"]
     if ambiguous:
         assert kwin.placements == []
         assert "No unique new window" in results[0]
     else:
         assert results == [None]
-        assert kwin.placements == [dict(window_id="new", x=-900, y=10, w=800, h=600)]
+        assert kwin.placements == [dict(window_id="new", x=-900, y=10, w=800, h=600, maximize_mode=3)]
 
 
 def test_live_unknown_pid_does_not_infer_process_from_desktop(tmp_path):

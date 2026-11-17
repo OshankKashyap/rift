@@ -2,10 +2,11 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 
 class Tray(QSystemTrayIcon):
-    def __init__(self, window, launch, parent=None):
+    def __init__(self, window, launch, parent=None, save_session=None):
         super().__init__(QApplication.windowIcon(), parent)
         self.window = window
         self.launch = launch
+        self.save_session = save_session
         self.menu = QMenu()
         self.setToolTip("Rift")
         self.setContextMenu(self.menu)
@@ -23,6 +24,8 @@ class Tray(QSystemTrayIcon):
     def refresh(self, groups):
         self.menu.clear()
         self.menu.addAction("Open Rift", self.open_window)
+        if self.save_session:
+            self.menu.addAction("Save current session", self.save_session)
         self.menu.addSeparator()
         for group in groups:
             self.menu.addAction(group["name"], lambda checked=False, gid=group["id"]: self.launch(gid))

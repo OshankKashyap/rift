@@ -319,7 +319,7 @@ class Launcher:
                         target = candidates[0]
                         used.add(target["window_id"])
                         placements.append({"window_id": target["window_id"],
-                                           **{k: app[k] for k in ("x", "y", "w", "h")}})
+                                           **{k: app[k] for k in ("x", "y", "w", "h", "desktops", "maximize_mode") if k in app}})
                     if missing and attempt < 11:
                         QTimer.singleShot(500, lambda: settle(attempt + 1))
                         return

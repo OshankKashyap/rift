@@ -19,14 +19,14 @@ SYSTEM_QT = Path("/usr/lib64/qt6")
 os.environ["QT_PLUGIN_PATH"] = os.pathsep.join(filter(None, [
     str(SYSTEM_QT / "plugins"), os.environ.get("QT_PLUGIN_PATH", "")]))
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, Property, Signal, Slot, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, Property, Signal, Slot, QTimer, QUrl
 from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from backend.kwin import KWin
-from backend.launcher import DesktopResolver, Launcher
+from backend.launcher import DesktopResolver, Launcher, normalized
 from backend.storage import Storage
 from backend.tray import Tray
 
@@ -40,6 +40,7 @@ class Controller(QObject):
     pickerChanged = Signal()
     pickerReady = Signal()
     picksChanged = Signal()
+    sessionChanged = Signal()
 
     def __init__(self, storage, kwin, parent=None):
         super().__init__(parent)
@@ -53,6 +54,106 @@ class Controller(QObject):
         self._picker_group = 0
         self._picker_name = ""
         self._picked = set()
+
+    @Property(bool, notify=sessionChanged)
+    def sessionEnabled(self):
+        return bool(self.storage.session_settings()["enabled"])
+
+    @Property(bool, notify=sessionChanged)
+    def smartRestore(self):
+        return bool(self.storage.session_settings()["smart"])
+
+    @Property("QVariantList", notify=sessionChanged)
+    def exclusions(self):
+        return self.storage.exclusions()
+
+    @Slot(bool)
+    def setSessionEnabled(self, value):
+        self.storage.set_session_option("enabled", value)
+        self.sessionChanged.emit()
+
+    @Slot(bool)
+    def setSmartRestore(self, value):
+        self.storage.set_session_option("smart", value)
+        self.sessionChanged.emit()
+
+    @Slot(str)
+    def addExclusion(self, identity):
+        identity = normalized(identity)
+        if identity:
+            self.storage.add_exclusion(identity)
+            self.sessionChanged.emit()
+
+    @Slot(str)
+    def removeExclusion(self, identity):
+        self.storage.remove_exclusion(identity)
+        self.sessionChanged.emit()
+
+    @Slot()
+    def saveSession(self):
+        if not self.begin():
+            return
+        def captured(windows, error):
+            if error:
+                self.done(error)
+                return
+            self.storage.save_session(windows)
+            self.done()
+            self.report(f"Saved session with {len(windows)} main windows.")
+        self.launcher.snapshot(captured)
+
+    def restoreSession(self):
+        if not self.sessionEnabled:
+            LOG.info("Session restore skipped: disabled in Preferences.")
+            return
+        if self.busy:
+            self.report("Session restore skipped because another operation is running.")
+            return
+        windows = self.storage.consume_session()
+        LOG.info("Session restore started with %d saved windows.", len(windows))
+        excluded = set(self.storage.exclusions())
+        def allowed(window):
+            return not any(normalized(window.get(key)) in excluded for key in ("app_id", "desktop_file") if window.get(key))
+        windows = [w for w in windows if allowed(w)]
+        if windows:
+            self.group_action_session(windows)
+
+    def group_action_session(self, windows):
+        if not self.begin():
+            self.report("Session restore skipped because another operation is running.")
+            return
+        try:
+            self.launcher.launch(windows, self.done)
+        except (ValueError, OSError, sqlite3.Error, configparser.Error) as exc:
+            self.done(str(exc))
+
+    def shutdownSnapshot(self):
+        if not (self.sessionEnabled and self.smartRestore):
+            LOG.info("Automatic session capture skipped: session restore or Smart restore is disabled.")
+            return True
+        loop = QEventLoop()
+        result = {"ok": False, "finished": False}
+        def captured(windows, error):
+            if result["finished"]:
+                return
+            if not error:
+                LOG.info("Automatic session capture found %d main windows.", len(windows))
+                if len(windows) >= 5:
+                    self.storage.save_session(windows)
+                    LOG.info("Automatic session snapshot saved.")
+                result["ok"] = True
+            else:
+                self.report("Session snapshot failed: " + error)
+            result["finished"] = True
+            loop.quit()
+        self.launcher.snapshot(captured)
+        QTimer.singleShot(11000, loop.quit)
+        if not result["finished"]:
+            loop.exec()
+        result["finished"] = True
+        if not result["ok"]:
+            LOG.warning("Automatic session capture did not complete; shutdown will not be marked clean.")
+        return result["ok"]
 
     @Property("QVariantList", notify=pickerChanged)
     def candidates(self):
@@ -290,6 +391,10 @@ def main():
         LOG.error("%s", exc)
         storage.close()
         return 1
+    previous_session = storage.start_session()
+    LOG.info("Session startup: enabled=%s smart=%s previous_clean=%s snapshot_present=%s",
+             bool(previous_session["enabled"]), bool(previous_session["smart"]),
+             bool(previous_session["clean"]), bool(previous_session["snapshot"]))
     controller = Controller(storage, kwin, app)
     engine = QQmlApplicationEngine()
     engine.addImportPath(str(SYSTEM_QT / "qml"))
@@ -300,7 +405,7 @@ def main():
         storage.close()
         return 1
     window = engine.rootObjects()[0]
-    tray = Tray(window, controller.launch, app)
+    tray = Tray(window, controller.launch, app, controller.saveSession)
     controller.tray = tray
     tray.refresh(controller.groups)
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
@@ -310,6 +415,20 @@ def main():
         tray.show()
     else:
         controller.report("System tray unavailable; closing the window will quit Rift.")
+    if previous_session["clean"] and previous_session["enabled"] and previous_session["snapshot"]:
+        QTimer.singleShot(5000, controller.restoreSession)
+
+    shutdown_state = {"captured": False}
+    def session_commit(_manager):
+        LOG.info("Session manager requested a shutdown snapshot.")
+        shutdown_state["captured"] = controller.shutdownSnapshot()
+    def finish_session():
+        LOG.info("Qt application is quitting; finalizing session state.")
+        if shutdown_state["captured"] or controller.shutdownSnapshot():
+            storage.mark_clean()
+            LOG.info("Session marked clean.")
+    app.commitDataRequest.connect(session_commit)
+    app.aboutToQuit.connect(finish_session)
     result = app.exec()
     tray.hide()
     kwin.shutdown()

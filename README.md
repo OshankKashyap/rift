@@ -16,6 +16,16 @@ From the project directory, in your KDE session:
 Closing the window hides Rift in the tray. Use **Quit** in the tray to exit or restart.
 Without a tray, closing the window quits. Run only one instance at a time.
 
+Open **Preferences** at the top right to enable session restore, enable Smart restore,
+and manage excluded app IDs or exact desktop-file paths. Save a session manually there
+or from the tray. Smart restore captures main windows on a clean exit when at least
+five are open. A saved session is consumed when restore begins, five seconds after
+the next eligible launch; an unclean exit discards it. Exclusions are saved separately
+and do not prevent windows being captured. Apps with an already-running main window
+are skipped entirely; background-only processes are not detected by the window tracker.
+Rift starts each saved app once; it cannot recreate an app's documents or guarantee
+multiple windows. Unresolved launchers and ambiguous matches are reported.
+
 ## Use
 
 | Action | What it does |
@@ -33,9 +43,9 @@ Without a tray, closing the window quits. Run only one instance at a time.
 ## Know the limits
 
 - Captures main windows, not helper dialogs or Rift itself.
-- Stores titles and frame geometry—not documents, browser tabs/sessions, activities, or virtual desktops.
+- Groups store titles and frame geometry; session snapshots also store virtual desktop assignments. Neither stores documents, browser tabs/sessions, or activities.
 - Launches each distinct app once; it does not recreate a specific number of windows.
-- Geometry restoration clears maximized/fullscreen state. Monitor changes and window rules can affect placement.
+- Session restore preserves maximized state; group launches clear it. Both clear fullscreen state. Monitor changes and window rules can affect placement.
 - Missing or ambiguous matches need manual overrides; Rift does not guess placement.
 - Both add actions skip already-saved windows using KWin window IDs; separate windows of the same app are kept. Picker geometry comes from the snapshot.
 - Older entries without window IDs use exact app/title/geometry matching only when unambiguous. If those details changed, a duplicate may need manual removal. Existing duplicates are not removed automatically.
@@ -94,5 +104,9 @@ Use disposable windows and save important work first:
 - [ ] Launch with some apps already open; verify skipping, launcher errors, and new-window geometry.
 - [ ] Recall disposable apps; check uncaptured matching windows, save prompts, and no forced closure.
 - [ ] Check tray actions, keyboard navigation, minimum window size, display scaling, and Plasma light/dark themes.
+- [ ] Save a session and quit Rift cleanly; restart and check the five-second delay, desktop assignments, geometry, exclusions, and running-app skips.
+- [ ] Save and restore a maximized window and a normal-sized window; check their size and maximize state in Plasma.
+- [ ] Repeat after a Plasma logout/restart and after an unclean Rift termination; verify only the clean session restores.
+- [ ] Check Smart restore with four and five main windows and test manual save from Preferences and the tray.
 
 Code: `main.py` (controller), `backend/` (KWin, launching, storage, tray), `qml/` (UI), `tests/` (verification).

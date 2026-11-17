@@ -1,6 +1,7 @@
 """Project-local SQLite persistence; schema changes are additive."""
 
 import sqlite3
+import json
 from collections import Counter
 
 
@@ -30,6 +31,13 @@ class Storage:
                     desktop_file TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS group_windows_group ON group_windows(group_id);
+                CREATE TABLE IF NOT EXISTS session_settings (
+                    id INTEGER PRIMARY KEY CHECK(id = 1), enabled INTEGER NOT NULL DEFAULT 0,
+                    smart INTEGER NOT NULL DEFAULT 0, clean INTEGER NOT NULL DEFAULT 0,
+                    snapshot TEXT
+                );
+                INSERT OR IGNORE INTO session_settings(id) VALUES (1);
+                CREATE TABLE IF NOT EXISTS session_exclusions (identity TEXT PRIMARY KEY);
             """)
             columns = {r[1] for r in self.connection.execute("PRAGMA table_info(group_windows)")}
             for column in ("match_app_id", "match_title", "match_process", "window_id"):
@@ -112,3 +120,48 @@ class Storage:
 
     def close(self):
         self.connection.close()
+
+    def session_settings(self):
+        return dict(self.connection.execute("SELECT * FROM session_settings WHERE id = 1").fetchone())
+
+    def set_session_option(self, name, value):
+        if name not in ("enabled", "smart"):
+            raise ValueError("Unknown session option")
+        with self.connection:
+            self.connection.execute(f"UPDATE session_settings SET {name} = ? WHERE id = 1", (int(value),))
+
+    def start_session(self):
+        with self.connection:
+            settings = self.session_settings()
+            self.connection.execute("UPDATE session_settings SET clean = 0, snapshot = CASE WHEN clean = 0 THEN NULL ELSE snapshot END WHERE id = 1")
+        return settings
+
+    def save_session(self, windows):
+        fields = ("app_id", "title", "x", "y", "w", "h", "desktop_file", "desktops")
+        snapshot = [{k: w.get(k, [] if k == "desktops" else "") for k in fields} for w in windows]
+        for saved, window in zip(snapshot, windows):
+            if "maximize_mode" in window:
+                saved["maximize_mode"] = window["maximize_mode"]
+        with self.connection:
+            self.connection.execute("UPDATE session_settings SET snapshot = ? WHERE id = 1", (json.dumps(snapshot),))
+
+    def consume_session(self):
+        with self.connection:
+            snapshot = self.session_settings()["snapshot"]
+            self.connection.execute("UPDATE session_settings SET snapshot = NULL WHERE id = 1")
+        return json.loads(snapshot) if snapshot else []
+
+    def mark_clean(self):
+        with self.connection:
+            self.connection.execute("UPDATE session_settings SET clean = 1 WHERE id = 1")
+
+    def exclusions(self):
+        return [r[0] for r in self.connection.execute("SELECT identity FROM session_exclusions ORDER BY identity")]
+
+    def add_exclusion(self, identity):
+        with self.connection:
+            self.connection.execute("INSERT OR IGNORE INTO session_exclusions VALUES (?)", (identity,))
+
+    def remove_exclusion(self, identity):
+        with self.connection:
+            self.connection.execute("DELETE FROM session_exclusions WHERE identity = ?", (identity,))

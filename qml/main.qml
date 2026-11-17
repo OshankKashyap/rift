@@ -54,6 +54,82 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    Controls.ToolButton {
+        objectName: "preferencesButton"
+        anchors.top: parent.top
+        anchors.right: parent.right
+        z: 100
+        icon.name: "configure"
+        Accessible.name: "Preferences"
+        Controls.ToolTip.visible: hovered
+        Controls.ToolTip.text: "Preferences"
+        onClicked: preferencesDialog.open()
+    }
+
+    Controls.Dialog {
+        id: preferencesDialog
+        objectName: "preferencesDialog"
+        parent: root.overlay
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Kirigami.Units.gridUnit * 2, Kirigami.Units.gridUnit * 28)
+        title: "Preferences"
+        modal: true
+        standardButtons: Controls.Dialog.Close
+        contentItem: ColumnLayout {
+            Controls.Switch {
+                objectName: "sessionRestoreSwitch"
+                text: "Enable session restore"
+                checked: rift.sessionEnabled
+                onToggled: rift.setSessionEnabled(checked)
+            }
+            ColumnLayout {
+                objectName: "sessionRestoreSettings"
+                visible: rift.sessionEnabled
+                Layout.fillWidth: true
+                Controls.CheckBox {
+                    text: "Smart restore (save 5 or more windows on exit)"
+                    checked: rift.smartRestore
+                    onToggled: rift.setSmartRestore(checked)
+                }
+                Controls.Button {
+                    text: "Save current session"
+                    enabled: !rift.busy
+                    onClicked: rift.saveSession()
+                }
+                Controls.Label { text: "Excluded app IDs or desktop file paths"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                RowLayout {
+                    Controls.TextField {
+                        id: exclusionInput
+                        Layout.fillWidth: true
+                        placeholderText: "e.g. org.kde.kate"
+                        Accessible.name: "App ID or desktop file path"
+                    }
+                    Controls.Button {
+                        text: "Add"
+                        enabled: exclusionInput.text.trim().length > 0
+                        onClicked: { rift.addExclusion(exclusionInput.text); exclusionInput.clear() }
+                    }
+                }
+                Controls.ScrollView {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Kirigami.Units.gridUnit * 7
+                    clip: true
+                    ListView {
+                        model: rift.exclusions
+                        delegate: Controls.ItemDelegate {
+                            required property string modelData
+                            width: ListView.view.width
+                            contentItem: RowLayout {
+                                Controls.Label { text: modelData; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                                Controls.ToolButton { icon.name: "list-remove"; Accessible.name: "Remove " + modelData; onClicked: rift.removeExclusion(modelData) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     footer: Controls.Pane {
         padding: Kirigami.Units.largeSpacing
         contentItem: RowLayout {

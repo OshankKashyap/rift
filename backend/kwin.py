@@ -114,6 +114,8 @@ class KWin(QObject):
                 .map(w => ({window_id: String(w.internalId),
                     app_id: String(w.resourceClass || ''), title: w.caption,
                     desktop_hint: String(w.desktopFileName || ''), pid: w.pid,
+                    desktops: (w.desktops || []).map(d => String(d.id)),
+                    maximize_mode: w.maximizeMode & 3,
                     x: Math.round(w.frameGeometry.x), y: Math.round(w.frameGeometry.y),
                     w: Math.round(w.frameGeometry.width), h: Math.round(w.frameGeometry.height)}));
         """
@@ -134,13 +136,21 @@ class KWin(QObject):
         self.run("""
             const placements = PLACEMENTS;
             let count = 0;
+            const missingDesktops = [];
             for (const w of workspace.windowList()) {
                 const p = placements.find(p => p.window_id === String(w.internalId));
                 if (!p) continue;
                 w.setMaximize(false, false);
                 w.fullScreen = false;
                 w.frameGeometry = {x: p.x, y: p.y, width: p.w, height: p.h};
+                if (p.desktops !== undefined) {
+                    const desktops = workspace.desktops.filter(d => p.desktops.includes(String(d.id)));
+                    if (desktops.length === p.desktops.length) w.desktops = desktops;
+                    else missingDesktops.push(p.window_id);
+                }
+                if (p.maximize_mode) w.setMaximize(!!(p.maximize_mode & 1), !!(p.maximize_mode & 2));
                 count++;
             }
+            if (missingDesktops.length) throw new Error('Saved virtual desktop is unavailable for: ' + missingDesktops.join(', '));
             return count;
         """.replace("PLACEMENTS", json.dumps(placements)), callback)

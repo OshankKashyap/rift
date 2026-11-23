@@ -63,6 +63,10 @@ class Controller(QObject):
     def smartRestore(self):
         return bool(self.storage.session_settings()["smart"])
 
+    @Property(bool, notify=sessionChanged)
+    def startInTray(self):
+        return bool(self.storage.session_settings()["start_in_tray"])
+
     @Property("QVariantList", notify=sessionChanged)
     def exclusions(self):
         return self.storage.exclusions()
@@ -75,6 +79,11 @@ class Controller(QObject):
     @Slot(bool)
     def setSmartRestore(self, value):
         self.storage.set_session_option("smart", value)
+        self.sessionChanged.emit()
+
+    @Slot(bool)
+    def setStartInTray(self, value):
+        self.storage.set_session_option("start_in_tray", value)
         self.sessionChanged.emit()
 
     @Slot(str)
@@ -415,6 +424,8 @@ def main():
         tray.show()
     else:
         controller.report("System tray unavailable; closing the window will quit Rift.")
+    if not (tray_available and previous_session["start_in_tray"]):
+        window.show()
     if previous_session["clean"] and previous_session["enabled"] and previous_session["snapshot"]:
         QTimer.singleShot(5000, controller.restoreSession)
 

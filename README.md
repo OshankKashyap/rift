@@ -15,6 +15,10 @@ From the project directory, in your KDE session:
 
 Closing the window hides Rift in the tray. Use **Quit** in the tray to exit or restart.
 Without a tray, closing the window quits. Run only one instance at a time.
+Enable **Start in system tray** in Preferences to launch without opening the main
+window, including at automatic startup. This takes effect on the next launch;
+if no system tray is available, Rift opens its window normally. Use **Open Rift**
+in the tray to show the window. This option does not configure automatic startup.
 
 Open **Preferences** at the top right to enable session restore, enable Smart restore,
 and manage excluded app IDs or exact desktop-file paths. Save a session manually there
@@ -93,7 +97,7 @@ TMPDIR="$PWD/.runtime/tmp" PIP_CACHE_DIR="$PWD/.runtime/cache/pip" .venv/bin/pyt
 TMPDIR="$PWD/.runtime/tmp" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest
 ```
 
-Latest checks: **127 tests passed**; all **49 UI tests also passed offscreen at 150% scaling**.
+Latest checks: **156 tests passed** offscreen.
 Offscreen/mocked tests do not establish live KDE behavior.
 
 ### Quick manual KDE checks
@@ -104,6 +108,8 @@ Use disposable windows and save important work first:
 - [ ] Launch with some apps already open; verify skipping, launcher errors, and new-window geometry.
 - [ ] Recall disposable apps; check uncaptured matching windows, save prompts, and no forced closure.
 - [ ] Check tray actions, keyboard navigation, minimum window size, display scaling, and Plasma light/dark themes.
+- [ ] Check normal startup with **Start in system tray** disabled, hidden startup with it enabled, opening from the tray, and the no-tray fallback. Confirm there is no window flash.
+- [ ] With hidden startup enabled, verify an eligible session still restores after five seconds.
 - [ ] Save a session and quit Rift cleanly; restart and check the five-second delay, desktop assignments, geometry, exclusions, and running-app skips.
 - [ ] Save and restore a maximized window and a normal-sized window; check their size and maximize state in Plasma.
 - [ ] Repeat after a Plasma logout/restart and after an unclean Rift termination; verify only the clean session restores.

@@ -34,6 +34,7 @@ def ui(app):
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml/main.qml")))
     assert engine.rootObjects(), warnings
     window = engine.rootObjects()[0]
+    window.show()
     QTest.qWait(50)
     yield window, controller, gid, warnings
     engine.deleteLater()
@@ -80,6 +81,19 @@ def test_session_switch_shows_settings_and_preserves_smart_option(ui):
     click_button(window, switch)
     assert not controller.sessionEnabled and not settings.property("visible")
     assert controller.smartRestore
+    assert not warnings
+
+
+def test_start_in_tray_switch_applies_on_next_launch(ui):
+    window, controller, _, warnings = ui
+    dialog = window.findChild(QObject, "preferencesDialog")
+    QMetaObject.invokeMethod(dialog, "open")
+    wait_for_popup(dialog)
+    switch = dialog.findChild(QObject, "startInTraySwitch")
+    assert not switch.property("checked")
+    click_button(window, switch)
+    assert controller.startInTray
+    assert window.isVisible()
     assert not warnings
 
 

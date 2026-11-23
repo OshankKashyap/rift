@@ -45,6 +45,9 @@ class Storage:
                     self.connection.execute(
                         f"ALTER TABLE group_windows ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
                     )
+            columns = {r[1] for r in self.connection.execute("PRAGMA table_info(session_settings)")}
+            if "start_in_tray" not in columns:
+                self.connection.execute("ALTER TABLE session_settings ADD COLUMN start_in_tray INTEGER NOT NULL DEFAULT 0")
 
     def groups(self):
         return [dict(r) for r in self.connection.execute("SELECT * FROM groups ORDER BY id")]
@@ -125,7 +128,7 @@ class Storage:
         return dict(self.connection.execute("SELECT * FROM session_settings WHERE id = 1").fetchone())
 
     def set_session_option(self, name, value):
-        if name not in ("enabled", "smart"):
+        if name not in ("enabled", "smart", "start_in_tray"):
             raise ValueError("Unknown session option")
         with self.connection:
             self.connection.execute(f"UPDATE session_settings SET {name} = ? WHERE id = 1", (int(value),))

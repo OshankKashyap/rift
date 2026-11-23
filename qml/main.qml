@@ -9,7 +9,7 @@ Kirigami.ApplicationWindow {
     height: 680
     minimumWidth: 640
     minimumHeight: 460
-    visible: true
+    visible: false
     title: "Rift"
     property bool trayAvailable: false
     property int recallId: 0
@@ -76,6 +76,12 @@ Kirigami.ApplicationWindow {
         modal: true
         standardButtons: Controls.Dialog.Close
         contentItem: ColumnLayout {
+            Controls.Switch {
+                objectName: "startInTraySwitch"
+                text: "Start in system tray"
+                checked: rift.startInTray
+                onToggled: rift.setStartInTray(checked)
+            }
             Controls.Switch {
                 objectName: "sessionRestoreSwitch"
                 text: "Enable session restore"

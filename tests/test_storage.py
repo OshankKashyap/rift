@@ -116,6 +116,23 @@ def test_additive_migration_preserves_existing_rows(tmp_path):
         db.close()
 
 
+def test_start_in_tray_default_migration_and_persistence(tmp_path):
+    path = tmp_path / "legacy-session.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE session_settings (id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, smart INTEGER NOT NULL DEFAULT 0, clean INTEGER NOT NULL DEFAULT 0, snapshot TEXT)")
+    connection.execute("INSERT INTO session_settings(id, enabled) VALUES (1, 1)")
+    connection.commit()
+    connection.close()
+    db = Storage(path)
+    assert db.session_settings()["start_in_tray"] == 0
+    assert db.session_settings()["enabled"] == 1
+    db.set_session_option("start_in_tray", True)
+    db.close()
+    db = Storage(path)
+    assert db.session_settings()["start_in_tray"] == 1
+    db.close()
+
+
 @pytest.mark.parametrize("change", [{}, dict(title="Renamed"), dict(x=100, y=200, w=1000, h=800)])
 def test_same_window_id_is_skipped_without_changing_saved_data(storage, window, change):
     original = dict(window, window_id="window-one")

@@ -102,6 +102,11 @@ Kirigami.ApplicationWindow {
                     enabled: !rift.busy
                     onClicked: rift.saveSession()
                 }
+                Controls.Button {
+                    objectName: "chooseExcludedApps"
+                    text: "Choose excluded apps…"
+                    onClicked: { rift.discoverApps(); excludedAppsDialog.open() }
+                }
                 Controls.Label { text: "Excluded app IDs or desktop file paths"; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 RowLayout {
                     Controls.TextField {
@@ -130,6 +135,56 @@ Kirigami.ApplicationWindow {
                                 Controls.ToolButton { icon.name: "list-remove"; Accessible.name: "Remove " + modelData; onClicked: rift.removeExclusion(modelData) }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: excludedAppsDialog
+        objectName: "excludedAppsDialog"
+        parent: root.overlay
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Kirigami.Units.gridUnit * 2, Kirigami.Units.gridUnit * 30)
+        title: "Excluded apps"
+        modal: true
+        standardButtons: Controls.Dialog.Close
+        onOpened: { appSearch.text = ""; appSearch.forceActiveFocus() }
+        contentItem: ColumnLayout {
+            Controls.TextField {
+                id: appSearch
+                objectName: "excludedAppSearch"
+                placeholderText: "Search app names…"
+                Accessible.name: "Search app names"
+                Layout.fillWidth: true
+            }
+            Controls.ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 16
+                contentWidth: availableWidth
+                ListView {
+                    id: excludedAppList
+                    objectName: "excludedAppList"
+                    clip: true
+                    model: {
+                        const query = appSearch.text.trim().toLowerCase()
+                        return rift.installedApps.filter(app => app.name.toLowerCase().includes(query))
+                    }
+                    delegate: Controls.CheckDelegate {
+                        required property var modelData
+                        width: ListView.view.width
+                        text: modelData.name
+                        icon.name: modelData.icon.startsWith("/") ? "" : modelData.icon
+                        icon.source: modelData.icon.startsWith("/") ? "file://" + modelData.icon : ""
+                        checked: modelData.checked
+                        Accessible.name: modelData.name
+                        onToggled: rift.setAppExcluded(modelData.id, modelData.path, checked)
+                    }
+                    Controls.Label {
+                        anchors.centerIn: parent
+                        visible: excludedAppList.count === 0
+                        text: rift.appsLoading ? "Loading apps…" : "No matching apps."
                     }
                 }
             }
@@ -515,16 +570,19 @@ Kirigami.ApplicationWindow {
         contentItem: Controls.ScrollView {
             id: editorScroll
             objectName: "editorScroll"
-            padding: Kirigami.Units.largeSpacing * 2
-            implicitHeight: editorLayout.implicitHeight + topPadding + bottomPadding
+            property real contentMargin: Kirigami.Units.largeSpacing * 2
+            implicitHeight: editorLayout.implicitHeight + contentMargin * 2
             contentWidth: availableWidth
+            contentHeight: editorLayout.implicitHeight + contentMargin * 2
             clip: true
             ColumnLayout {
                 id: editorLayout
-                width: editorScroll.availableWidth
+                x: editorScroll.contentMargin
+                y: editorScroll.contentMargin
+                width: Math.max(0, editorScroll.availableWidth - editorScroll.contentMargin * 2)
                 spacing: Kirigami.Units.largeSpacing
                 Controls.Label {
-                    text: "The desktop entry tells Rift how to launch this app. Leave matching overrides blank to use its captured identity."
+                    text: "Enter a desktop ID or the path to a .desktop file to launch this app."
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
@@ -542,7 +600,7 @@ Kirigami.ApplicationWindow {
                 Kirigami.Separator { Layout.fillWidth: true }
                 Kirigami.Heading { text: "Exact matching overrides"; level: 3 }
                 Controls.Label {
-                    text: "When provided, every nonblank override must match. Titles and process paths are case-sensitive."
+                    text: "Optional. Leave these blank to use the captured identity. Every filled field must match; titles and process paths are case-sensitive."
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0

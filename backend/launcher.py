@@ -3,11 +3,11 @@
 import configparser
 import logging
 import os
-from pathlib import Path
 import shlex
 import shutil
+from pathlib import Path
 
-from PySide6.QtCore import QProcess, QTimer
+from PySide6.QtCore import QLocale, QProcess, QTimer
 
 LOG = logging.getLogger(__name__)
 
@@ -18,8 +18,10 @@ def normalized(value):
 
 
 def match_key(window):
-    overrides = tuple(window.get(k, "").strip() for k in
-                      ("match_app_id", "match_title", "match_process"))
+    overrides = tuple(
+        window.get(k, "").strip()
+        for k in ("match_app_id", "match_title", "match_process")
+    )
     if any(overrides):
         return ("override", normalized(overrides[0]), overrides[1], overrides[2])
     if window.get("app_id"):
@@ -39,25 +41,50 @@ def dedupe(windows):
 
 
 def matches(stored, live):
-    app, title, process = (stored.get(k, "").strip() for k in
-                           ("match_app_id", "match_title", "match_process"))
+    app, title, process = (
+        stored.get(k, "").strip()
+        for k in ("match_app_id", "match_title", "match_process")
+    )
     if app or title or process:
-        return ((not app or normalized(app) == normalized(live.get("app_id")))
-                and (not title or title == live.get("title"))
-                and (not process or process == live.get("process")))
-    if stored.get("app_id") and normalized(stored["app_id"]) == normalized(live.get("app_id")):
+        return (
+            (not app or normalized(app) == normalized(live.get("app_id")))
+            and (not title or title == live.get("title"))
+            and (not process or process == live.get("process"))
+        )
+    if stored.get("app_id") and normalized(stored["app_id"]) == normalized(
+        live.get("app_id")
+    ):
         return True
-    if stored.get("desktop_file") and stored["desktop_file"] == live.get("desktop_file"):
+    if stored.get("desktop_file") and stored["desktop_file"] == live.get(
+        "desktop_file"
+    ):
         if normalized(stored.get("app_id")) != normalized(live.get("app_id")):
-            LOG.warning("AppId unreliable for %r; matched exact desktop file. Review overrides.", stored.get("title"))
+            LOG.warning(
+                "AppId unreliable for %r; matched exact desktop file. Review overrides.",
+                stored.get("title"),
+            )
         return True
     # /proc/<KWin PID>/exe supplies an exact executable, not a guessed process name.
-    if (stored.get("process") and stored["process"] == live.get("process")
-            and stored.get("title") and stored["title"] == live.get("title")):
-        LOG.warning("AppId unreliable for %r; matched exact process executable. Review overrides.", stored.get("title"))
+    if (
+        stored.get("process")
+        and stored["process"] == live.get("process")
+        and stored.get("title")
+        and stored["title"] == live.get("title")
+    ):
+        LOG.warning(
+            "AppId unreliable for %r; matched exact process executable. Review overrides.",
+            stored.get("title"),
+        )
         return True
-    if (not stored.get("app_id") or not live.get("app_id")) and stored.get("title") == live.get("title") and stored.get("title"):
-        LOG.warning("AppId unavailable for %r; using exact title. Set a manual override.", stored["title"])
+    if (
+        (not stored.get("app_id") or not live.get("app_id"))
+        and stored.get("title") == live.get("title")
+        and stored.get("title")
+    ):
+        LOG.warning(
+            "AppId unavailable for %r; using exact title. Set a manual override.",
+            stored["title"],
+        )
         return True
     return False
 
@@ -65,8 +92,21 @@ def matches(stored, live):
 class DesktopResolver:
     def __init__(self):
         data_home = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))
-        self.roots = [Path(p) / "applications" for p in
-                      [data_home, *os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")]]
+        self.roots = [
+            Path(p) / "applications"
+            for p in [
+                data_home,
+                *os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(
+                    ":"
+                ),
+            ]
+        ]
+        user_flatpak = Path.home() / ".local/share/flatpak/exports/share/applications"
+        system_flatpak = Path("/var/lib/flatpak/exports/share/applications")
+        if user_flatpak not in self.roots:
+            self.roots.insert(1, user_flatpak)
+        if system_flatpak not in self.roots:
+            self.roots.append(system_flatpak)
         self._actions = 0
         self._index = None
 
@@ -109,8 +149,9 @@ class DesktopResolver:
             if not root.is_dir():
                 continue
             for candidate in root.rglob("*.desktop"):
-                index.setdefault(str(candidate.relative_to(root)).replace("/", "-"),
-                                 str(candidate))
+                index.setdefault(
+                    str(candidate.relative_to(root)).replace("/", "-"), str(candidate)
+                )
         if self._actions:
             self._index = index
         return index
@@ -127,14 +168,54 @@ class DesktopResolver:
         if not parser.has_section("Desktop Entry"):
             raise ValueError(f"Invalid desktop file: {path}")
         entry = parser["Desktop Entry"]
-        if entry.get("Type", "Application") != "Application" or entry.getboolean("Hidden", False):
+        if entry.get("Type", "Application") != "Application" or entry.getboolean(
+            "Hidden", False
+        ):
             raise ValueError(f"Desktop file is not a launchable application: {path}")
         return entry
+
+    def installed_apps(self):
+        """List visible applications, honoring desktop-ID precedence."""
+        apps = []
+        languages = [
+            language.replace("-", "_") for language in QLocale.system().uiLanguages()
+        ]
+        for desktop_id, path in self._desktop_index().items():
+            try:
+                entry = self.entry(path)
+                if entry.getboolean("NoDisplay", False) or entry.getboolean(
+                    "Terminal", False
+                ):
+                    continue
+                name = next(
+                    (
+                        entry.get(f"Name[{language}]")
+                        for language in languages
+                        if entry.get(f"Name[{language}]")
+                    ),
+                    entry.get("Name", ""),
+                )
+                if name:
+                    apps.append(
+                        {
+                            "id": desktop_id,
+                            "path": path,
+                            "name": name,
+                            "icon": entry.get("Icon", ""),
+                        }
+                    )
+            except (OSError, ValueError, configparser.Error):
+                LOG.debug("Skipping hidden or invalid desktop entry %s", path)
+        return sorted(apps, key=lambda app: app["name"].casefold())
 
     def desktop_id(self, path):
         for root in self.roots:
             if Path(path).is_relative_to(root):
-                return str(Path(path).relative_to(root)).removesuffix(".desktop").replace("/", "-")
+                return (
+                    str(Path(path).relative_to(root))
+                    .removesuffix(".desktop")
+                    .replace("/", "-")
+                )
         return ""
 
     def executable(self, path):
@@ -148,12 +229,19 @@ class DesktopResolver:
 
     def enrich(self, windows):
         for window in windows:
-            window["desktop_file"] = self.resolve(window.get("desktop_file") or
-                window.get("desktop_hint") or window.get("app_id"))
+            window["desktop_file"] = self.resolve(
+                window.get("desktop_file")
+                or window.get("desktop_hint")
+                or window.get("app_id")
+            )
             if "pid" in window:
                 try:
                     pid = int(window["pid"])
-                    window["process"] = str(Path(f"/proc/{pid}/exe").resolve(strict=True)) if pid > 0 else ""
+                    window["process"] = (
+                        str(Path(f"/proc/{pid}/exe").resolve(strict=True))
+                        if pid > 0
+                        else ""
+                    )
                 except (OSError, ValueError):
                     window["process"] = ""
             else:
@@ -162,7 +250,10 @@ class DesktopResolver:
                 except (ValueError, configparser.Error):
                     window["process"] = ""
             if not window.get("app_id"):
-                LOG.warning("Missing appId for %r; review manual matching overrides.", window.get("title"))
+                LOG.warning(
+                    "Missing appId for %r; review manual matching overrides.",
+                    window.get("title"),
+                )
         return windows
 
 
@@ -188,6 +279,7 @@ class Launcher:
                 callback(windows, None)
             finally:
                 self.resolver.end_action()
+
         self.kwin.snapshot(received, main_only=main_only)
 
     def run_helper(self, program, arguments, callback):
@@ -202,22 +294,36 @@ class Launcher:
             callback(error)
 
         def finished(code, status):
-            diagnostic = bytes(process.readAllStandardError()).decode("utf-8", errors="replace").strip()
+            diagnostic = (
+                bytes(process.readAllStandardError())
+                .decode("utf-8", errors="replace")
+                .strip()
+            )
             if code != 0 or status != QProcess.ExitStatus.NormalExit:
-                complete(f"{Path(program).name} failed: {diagnostic or f'exit code {code}'}")
+                complete(
+                    f"{Path(program).name} failed: {diagnostic or f'exit code {code}'}"
+                )
             else:
                 complete(None)
 
         process.finished.connect(finished)
-        process.errorOccurred.connect(lambda error: complete(
-            f"Cannot start {program}: {process.errorString()}")
-            if error == QProcess.ProcessError.FailedToStart else None)
+        process.errorOccurred.connect(
+            lambda error: (
+                complete(f"Cannot start {program}: {process.errorString()}")
+                if error == QProcess.ProcessError.FailedToStart
+                else None
+            )
+        )
         process.start(program, arguments)
 
     def activate(self, window, callback):
         path = window.get("desktop_file")
         if not path:
-            callback("No desktop file for " + window.get("title", "app") + "; set it in the editor.")
+            callback(
+                "No desktop file for "
+                + window.get("title", "app")
+                + "; set it in the editor."
+            )
             return
         try:
             entry = self.resolver.entry(path)
@@ -233,25 +339,39 @@ class Launcher:
             if desktop_id and self.resolver.resolve(desktop_id) == path:
                 kstart = shutil.which("kstart") or shutil.which("kstart6")
                 if not kstart:
-                    callback("kstart is missing. Ask the user to install Fedora's kde-cli-tools package.")
+                    callback(
+                        "kstart is missing. Ask the user to install Fedora's kde-cli-tools package."
+                    )
                     return
                 ok, _pid = QProcess.startDetached(kstart, ["--application", desktop_id])
                 callback(None if ok else f"kstart could not launch {path}")
                 return
             kioclient = shutil.which("kioclient6") or shutil.which("kioclient")
             if not kioclient:
-                callback("kioclient is missing. Ask the user to install Fedora's kde-cli-tools package.")
+                callback(
+                    "kioclient is missing. Ask the user to install Fedora's kde-cli-tools package."
+                )
                 return
             LOG.info("Launching exact desktop file through kioclient: %s", path)
-            self.run_helper(kioclient, ["exec", Path(path).as_uri(), "application/x-desktop"], callback)
+            self.run_helper(
+                kioclient,
+                ["exec", Path(path).as_uri(), "application/x-desktop"],
+                callback,
+            )
 
         if not activatable:
             fallback()
             return
         activation_id = desktop_id or Path(path).stem
         object_path = "/" + activation_id.replace(".", "/").replace("-", "_")
-        self.kwin.call(activation_id, object_path, "org.freedesktop.Application", "Activate", [{}],
-                       lambda _, error: fallback() if error else callback(None))
+        self.kwin.call(
+            activation_id,
+            object_path,
+            "org.freedesktop.Application",
+            "Activate",
+            [{}],
+            lambda _, error: fallback() if error else callback(None),
+        )
 
     def launch(self, stored, done):
         self.resolver.begin_action()
@@ -273,7 +393,9 @@ class Launcher:
                 return
             todo = [w for w in apps if not any(matches(w, v) for v in live)]
             skipped = len(apps) - len(todo)
-            self.report(f"Launching {len(todo)} apps; skipping {skipped} already running.")
+            self.report(
+                f"Launching {len(todo)} apps; skipping {skipped} already running."
+            )
             original_ids = {w["window_id"] for w in live}
             launched = []
             errors = []
@@ -293,6 +415,7 @@ class Launcher:
                     else:
                         launched.append(todo[index])
                     next_app(index + 1)
+
                 self.activate(todo[index], activated)
 
             def settle(attempt):
@@ -307,9 +430,20 @@ class Launcher:
                     launched_keys = {match_key(app) for app in launched}
                     rows = [row for row in stored if match_key(row) in launched_keys]
                     # Reserve exact-title matches before considering a single remaining window.
-                    rows.sort(key=lambda row: not any(matches(row, v) and v["title"] == row["title"] for v in fresh))
+                    rows.sort(
+                        key=lambda row: (
+                            not any(
+                                matches(row, v) and v["title"] == row["title"]
+                                for v in fresh
+                            )
+                        )
+                    )
                     for app in rows:
-                        candidates = [v for v in fresh if matches(app, v) and v["window_id"] not in used]
+                        candidates = [
+                            v
+                            for v in fresh
+                            if matches(app, v) and v["window_id"] not in used
+                        ]
                         exact = [v for v in candidates if v["title"] == app["title"]]
                         if len(exact) == 1:
                             candidates = exact
@@ -318,18 +452,46 @@ class Launcher:
                             continue
                         target = candidates[0]
                         used.add(target["window_id"])
-                        placements.append({"window_id": target["window_id"],
-                                           **{k: app[k] for k in ("x", "y", "w", "h", "desktops", "maximize_mode") if k in app}})
+                        placements.append(
+                            {
+                                "window_id": target["window_id"],
+                                **{
+                                    k: app[k]
+                                    for k in (
+                                        "x",
+                                        "y",
+                                        "w",
+                                        "h",
+                                        "desktops",
+                                        "maximize_mode",
+                                    )
+                                    if k in app
+                                },
+                            }
+                        )
                     if missing and attempt < 11:
                         QTimer.singleShot(500, lambda: settle(attempt + 1))
                         return
                     if missing:
-                        errors.append("No unique new window for: " + ", ".join(missing)
-                                      + ". Review matching overrides; geometry was not guessed.")
-                    self.kwin.restore(placements, lambda _, restore_error:
-                        completed("; ".join(errors + ([restore_error] if restore_error else [])) or None))
+                        errors.append(
+                            "No unique new window for: "
+                            + ", ".join(missing)
+                            + ". Review matching overrides; geometry was not guessed."
+                        )
+                    self.kwin.restore(
+                        placements,
+                        lambda _, restore_error: completed(
+                            "; ".join(
+                                errors + ([restore_error] if restore_error else [])
+                            )
+                            or None
+                        ),
+                    )
+
                 self.snapshot(received)
+
             next_app()
+
         try:
             self.snapshot(captured)
         except BaseException:
@@ -354,11 +516,16 @@ class Launcher:
                 completed(error)
                 return
             ids = [v["window_id"] for v in live if any(matches(w, v) for w in stored)]
+
             def closed(count, err):
                 completed(err)
                 if not err:
-                    self.report(f"Sent {count} graceful close requests. Save prompts may remain open.")
+                    self.report(
+                        f"Sent {count} graceful close requests. Save prompts may remain open."
+                    )
+
             self.kwin.close_windows(ids, closed)
+
         try:
             self.snapshot(captured, main_only=False)
         except BaseException:

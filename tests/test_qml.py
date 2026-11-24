@@ -1,34 +1,61 @@
 import pytest
-from PySide6.QtCore import Q_ARG, QCoreApplication, QEvent, QMetaObject, QObject, QPointF, Qt, QUrl
+from PySide6.QtCore import (
+    Q_ARG,
+    QCoreApplication,
+    QEvent,
+    QMetaObject,
+    QObject,
+    QPointF,
+    Qt,
+    QUrl,
+)
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 
-from main import Controller, ROOT, SYSTEM_QT
 from backend.storage import Storage
+from main import ROOT, SYSTEM_QT, Controller
 
 
 def wait_for_popup(dialog, opened=True):
     for _ in range(100):
-        if (dialog.property("opened") if opened else not dialog.property("visible")):
+        if dialog.property("opened") if opened else not dialog.property("visible"):
             return
         QTest.qWait(10)
-    pytest.fail("Popup did not finish opening" if opened else "Popup did not finish closing")
+    pytest.fail(
+        "Popup did not finish opening" if opened else "Popup did not finish closing"
+    )
 
 
 def click_button(window, button):
-    position = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+    position = button.mapToScene(
+        QPointF(button.width() / 2, button.height() / 2)
+    ).toPoint()
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, position)
 
 
 @pytest.fixture
 def ui(app):
     storage = Storage(":memory:")
-    gid = storage.capture("Work", [dict(app_id="org.kde.kate", title="Notes",
-                                       x=0, y=20, w=900, h=700, desktop_file="")])
+    gid = storage.capture(
+        "Work",
+        [
+            dict(
+                app_id="org.kde.kate",
+                title="Notes",
+                x=0,
+                y=20,
+                w=900,
+                h=700,
+                desktop_file="",
+            )
+        ],
+    )
     controller = Controller(storage, None)
     engine = QQmlApplicationEngine()
     warnings = []
-    engine.warnings.connect(lambda errors: warnings.extend(e.toString() for e in errors))
+    engine.warnings.connect(
+        lambda errors: warnings.extend(e.toString() for e in errors)
+    )
     engine.addImportPath(str(SYSTEM_QT / "qml"))
     engine.rootContext().setContextProperty("rift", controller)
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml/main.qml")))
@@ -44,7 +71,9 @@ def ui(app):
 
 def test_group_detail_loads_without_qml_errors(ui):
     window, controller, gid, warnings = ui
-    assert QMetaObject.invokeMethod(window, "openGroup", Qt.DirectConnection, Q_ARG(int, gid))
+    assert QMetaObject.invokeMethod(
+        window, "openGroup", Qt.DirectConnection, Q_ARG(int, gid)
+    )
     QTest.qWait(100)
     assert controller.selected == gid
     assert window.findChild(QObject, "groupDetail") is not None
@@ -97,7 +126,18 @@ def test_start_in_tray_switch_applies_on_next_launch(ui):
     assert not warnings
 
 
-@pytest.mark.parametrize("name", ["captureDialog", "renameDialog", "deleteDialog", "recallDialog", "overrideDialog", "removeDialog", "preferencesDialog"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "captureDialog",
+        "renameDialog",
+        "deleteDialog",
+        "recallDialog",
+        "overrideDialog",
+        "removeDialog",
+        "preferencesDialog",
+    ],
+)
 def test_dialog_renders_offscreen(ui, name):
     window, controller, gid, warnings = ui
     controller.select(gid)
@@ -122,7 +162,9 @@ def test_dialog_fields_stay_within_bounds(ui, size, name):
     assert dialog.property("y") >= 0
     assert dialog.property("x") + dialog.property("width") <= window.width() + 1
     assert dialog.property("y") + dialog.property("height") <= window.height() + 1
-    field = dialog.findChild(QObject, "desktopFile" if name == "overrideDialog" else "nameField")
+    field = dialog.findChild(
+        QObject, "desktopFile" if name == "overrideDialog" else "nameField"
+    )
     content = dialog.property("contentItem")
     position = field.mapToItem(content, QPointF(0, 0))
     assert position.x() >= -1
@@ -132,6 +174,11 @@ def test_dialog_fields_stay_within_bounds(ui, size, name):
         assert position.y() + field.height() <= content.height() + 1
     else:
         scroll = dialog.findChild(QObject, "editorScroll")
+        assert position.x() >= scroll.property("contentMargin") - 1
+        assert (
+            position.x() + field.width()
+            <= content.width() - scroll.property("contentMargin") + 1
+        )
         assert scroll.property("contentHeight") > 0
         if size == (640, 460):
             assert scroll.property("contentHeight") > scroll.property("availableHeight")
@@ -159,8 +206,24 @@ def test_name_dialog_blocks_empty_submission(ui, name, text):
 @pytest.mark.parametrize("use_keyboard", [False, True])
 def test_capture_submit_creates_and_opens_group(ui, monkeypatch, use_keyboard):
     window, controller, _, warnings = ui
-    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: callback([
-        dict(app_id="test", title="Test window", x=0, y=0, w=800, h=600, desktop_file="")], None))
+    monkeypatch.setattr(
+        controller.launcher,
+        "snapshot",
+        lambda callback: callback(
+            [
+                dict(
+                    app_id="test",
+                    title="Test window",
+                    x=0,
+                    y=0,
+                    w=800,
+                    h=600,
+                    desktop_file="",
+                )
+            ],
+            None,
+        ),
+    )
     QMetaObject.invokeMethod(window, "startCapture")
     dialog = window.findChild(QObject, "captureDialog")
     dialog.setProperty("text", "  Study  ")
@@ -204,12 +267,16 @@ def test_group_switch_reuses_detail_page(ui):
     second = controller.storage.capture("Second", [])
     controller.refresh()
     for group in (gid, second, gid):
-        QMetaObject.invokeMethod(window, "openGroup", Qt.DirectConnection, Q_ARG(int, group))
+        QMetaObject.invokeMethod(
+            window, "openGroup", Qt.DirectConnection, Q_ARG(int, group)
+        )
         QTest.qWait(50)
         assert window.findChild(QObject, "groupPages").property("depth") == 2
         assert controller.selected == group
     assert len(window.findChildren(QObject, "groupDetail")) == 1
-    QMetaObject.invokeMethod(window, "openGroup", Qt.DirectConnection, Q_ARG(int, second))
+    QMetaObject.invokeMethod(
+        window, "openGroup", Qt.DirectConnection, Q_ARG(int, second)
+    )
     QTest.qWait(50)
     assert window.findChild(QObject, "emptyGroupPlaceholder").property("visible")
     assert not window.findChild(QObject, "launchGroupButton").property("enabled")
@@ -332,9 +399,21 @@ def test_relative_process_override_is_rejected(ui):
 
 def prepare_picker(ui, monkeypatch, count=3):
     window, controller, gid, _ = ui
-    rows = [dict(app_id="org.kde.konsole", title=f"Terminal {i}",
-                 x=i * 10, y=20, w=800, h=600, desktop_file="") for i in range(count)]
-    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: callback(rows, None))
+    rows = [
+        dict(
+            app_id="org.kde.konsole",
+            title=f"Terminal {i}",
+            x=i * 10,
+            y=20,
+            w=800,
+            h=600,
+            desktop_file="",
+        )
+        for i in range(count)
+    ]
+    monkeypatch.setattr(
+        controller.launcher, "snapshot", lambda callback: callback(rows, None)
+    )
     controller.select(gid)
     QTest.qWait(50)
     click_button(window, window.findChild(QObject, "selectWindowsButton"))
@@ -378,7 +457,10 @@ def test_picker_filters_keeps_selection_and_appends_only_checked(ui, monkeypatch
     assert candidates.property("currentItem").property("checked")
     click_button(window, button)
     wait_for_popup(dialog, opened=False)
-    assert [w["title"] for w in controller.storage.windows(gid)] == ["Notes", "Terminal 39"]
+    assert [w["title"] for w in controller.storage.windows(gid)] == [
+        "Notes",
+        "Terminal 39",
+    ]
     assert controller.windows[1]["x"] == 390
     assert controller.candidates == []
     assert not warnings
@@ -467,12 +549,28 @@ def test_picker_keyboard_toggle_preserves_focus(ui, monkeypatch):
     assert not warnings
 
 
-def test_picker_searches_desktop_app_name_and_keeps_same_app_windows_separate(ui, monkeypatch):
+def test_picker_searches_desktop_app_name_and_keeps_same_app_windows_separate(
+    ui, monkeypatch
+):
     _, controller, gid, warnings = ui
-    monkeypatch.setattr(controller.launcher.resolver, "entry", lambda path: {"Name": "Friendly App"})
-    rows = [dict(app_id="same.app", title="Same title", x=i * 10, y=0,
-                 w=800, h=600, desktop_file="test.desktop") for i in range(2)]
-    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: callback(rows, None))
+    monkeypatch.setattr(
+        controller.launcher.resolver, "entry", lambda path: {"Name": "Friendly App"}
+    )
+    rows = [
+        dict(
+            app_id="same.app",
+            title="Same title",
+            x=i * 10,
+            y=0,
+            w=800,
+            h=600,
+            desktop_file="test.desktop",
+        )
+        for i in range(2)
+    ]
+    monkeypatch.setattr(
+        controller.launcher, "snapshot", lambda callback: callback(rows, None)
+    )
     controller.preparePicker(gid)
     dialog = ui[0].findChild(QObject, "windowPicker")
     wait_for_popup(dialog)
@@ -491,7 +589,9 @@ def test_picker_searches_desktop_app_name_and_keeps_same_app_windows_separate(ui
 
 @pytest.mark.parametrize("first_group", [False, True])
 @pytest.mark.parametrize("confirm", [False, True])
-def test_new_group_selective_capture_from_group_navigation(ui, monkeypatch, first_group, confirm):
+def test_new_group_selective_capture_from_group_navigation(
+    ui, monkeypatch, first_group, confirm
+):
     window, controller, gid, warnings = ui
     if first_group:
         window.resize(640, 460)
@@ -499,9 +599,21 @@ def test_new_group_selective_capture_from_group_navigation(ui, monkeypatch, firs
         controller.refresh()
         QTest.qWait(50)
     original_groups = controller.groups
-    rows = [dict(app_id="test.app", title=f"Window {i}", x=i * 10, y=0,
-                 w=800, h=600, desktop_file="") for i in range(3)]
-    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: callback(rows, None))
+    rows = [
+        dict(
+            app_id="test.app",
+            title=f"Window {i}",
+            x=i * 10,
+            y=0,
+            w=800,
+            h=600,
+            desktop_file="",
+        )
+        for i in range(3)
+    ]
+    monkeypatch.setattr(
+        controller.launcher, "snapshot", lambda callback: callback(rows, None)
+    )
     click_button(window, window.findChild(QObject, "captureWindowsButton"))
     naming = window.findChild(QObject, "captureDialog")
     wait_for_popup(naming)
@@ -542,10 +654,14 @@ def test_new_group_selective_capture_from_group_navigation(ui, monkeypatch, firs
 
 
 @pytest.mark.parametrize("snapshot_error", [None, "Snapshot failed"])
-def test_new_group_picker_does_not_create_group_for_empty_or_failed_snapshot(ui, monkeypatch, snapshot_error):
+def test_new_group_picker_does_not_create_group_for_empty_or_failed_snapshot(
+    ui, monkeypatch, snapshot_error
+):
     window, controller, _, warnings = ui
     before = controller.groups
-    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: callback([], snapshot_error))
+    monkeypatch.setattr(
+        controller.launcher, "snapshot", lambda callback: callback([], snapshot_error)
+    )
     controller.preparePicker(0, "New group")
     assert controller.groups == before
     assert not controller.busy
@@ -562,7 +678,11 @@ def test_new_group_picker_does_not_create_group_for_empty_or_failed_snapshot(ui,
 
 def test_new_group_picker_rejects_blank_name(ui, monkeypatch):
     _, controller, _, warnings = ui
-    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: pytest.fail("Must not capture"))
+    monkeypatch.setattr(
+        controller.launcher,
+        "snapshot",
+        lambda callback: pytest.fail("Must not capture"),
+    )
     controller.preparePicker(0, "   ")
     assert "group name" in controller.status
     assert not controller.busy
@@ -570,15 +690,21 @@ def test_new_group_picker_rejects_blank_name(ui, monkeypatch):
 
 
 @pytest.mark.parametrize("selective", [False, True])
-def test_both_add_paths_skip_saved_window_and_keep_other_same_app_window(ui, monkeypatch, selective):
+def test_both_add_paths_skip_saved_window_and_keep_other_same_app_window(
+    ui, monkeypatch, selective
+):
     window, controller, gid, warnings = ui
     controller.select(gid)
     saved = controller.storage.windows(gid)[0]
     # Associate the pre-feature saved row with its live KWin ID first.
     controller.storage.capture("", [dict(saved, window_id="saved-window")], gid)
-    rows = [dict(saved, window_id="saved-window", title="Title changed", x=200),
-            dict(saved, window_id="other-window")]
-    monkeypatch.setattr(controller.launcher, "snapshot", lambda callback: callback(rows, None))
+    rows = [
+        dict(saved, window_id="saved-window", title="Title changed", x=200),
+        dict(saved, window_id="other-window"),
+    ]
+    monkeypatch.setattr(
+        controller.launcher, "snapshot", lambda callback: callback(rows, None)
+    )
     if selective:
         controller.preparePicker(gid)
         picker = window.findChild(QObject, "windowPicker")
@@ -589,7 +715,10 @@ def test_both_add_paths_skip_saved_window_and_keep_other_same_app_window(ui, mon
         wait_for_popup(picker, opened=False)
     else:
         controller.capture("", gid)
-    assert [w["window_id"] for w in controller.windows] == ["saved-window", "other-window"]
+    assert [w["window_id"] for w in controller.windows] == [
+        "saved-window",
+        "other-window",
+    ]
     assert controller.windows[0]["title"] == "Notes"
     assert "Added 1" in controller.status
     assert "Skipped 1" in controller.status
